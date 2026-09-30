@@ -43,14 +43,15 @@ jobs:
       - name: Setup ccache
         uses: actions/cache@v3
         with:
-          path: ~/.ccache
+          # Point the GitHub cache to the Android-allowed 'out' directory
+          path: workspace/out/ccache
           key: ${{ runner.os }}-ccache-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-ccache-
 
-      - name: Sync OrangeFox Workspace (Shallow Clone)
+      - name: Sync OrangeFox Workspace
         run: |
-          # Added --depth=1 to heavily reduce git clone download times
+          # Shallow clone to speed up download
           git clone --depth=1 https://gitlab.com/OrangeFox/sync.git
           cd sync
           yes | ./orangefox_sync.sh --branch 12.1 --path ${{ github.workspace }}/workspace
@@ -59,23 +60,29 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: workspace/device/infinix/X682C
-          fetch-depth: 1 # Ensuring shallow checkout here as well
+          fetch-depth: 1
 
       - name: Build Recovery
         run: |
           cd workspace
           set +e
+          
+          # Force ccache to use the 'out' directory to bypass Android's read-only sandbox
+          export CCACHE_DIR=$(pwd)/out/ccache
+          export CCACHE_EXEC=/usr/bin/ccache
+          export USE_CCACHE=1
+          mkdir -p $CCACHE_DIR
+          ccache -M 10G
+          ccache -o compression=true
+          
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
           export FOX_BUILD_DEVICE=X682C
           export LC_ALL="C"
-          export USE_CCACHE=1
-          export CCACHE_EXEC=/usr/bin/ccache
-          ccache -M 10G
-          # Increased throttle to -j4 to speed up compilation
           export SOONG_GEN_NINJA_ARGS="-j4"
           export NINJA_ARGS="-j4"
           export _JAVA_OPTIONS="-Xmx4g"
+          
           lunch twrp_X682C-eng
           set -e
           make -j4 recoveryimage
