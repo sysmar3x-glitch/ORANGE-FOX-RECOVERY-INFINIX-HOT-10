@@ -1,0 +1,87 @@
+name: Build OrangeFox Recovery
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Compile Recovery
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Maximize Build Space & Disable OOM Killer
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          sudo systemctl disable --now systemd-oomd || true
+          df -h
+
+      - name: Allocate Swap Space
+        run: |
+          sudo swapoff -a
+          sudo rm -f /swapfile
+          # 12GB Swap - With systemd-oomd dead, the kernel will use this safely
+          sudo dd if=/dev/zero of=/swapfile bs=1M count=12288 status=progress
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      - name: Set up build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-core gnupg flex bison build-essential zip curl zlib1g-dev libc6-dev-i386 x11proto-dev libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3 python-is-python3 openjdk-11-jdk rsync bc cpio libssl-dev lzop schedtool ccache
+          sudo curl -o /usr/local/bin/repo https://storage.googleapis.com/git-repo-downloads/repo
+          sudo chmod a+x /usr/local/bin/repo
+          git config --global user.name "sysmar3x-glitch"
+          git config --global user.email "sysmar3x-glitch@users.noreply.github.com"
+
+      - name: Setup ccache
+        uses: actions/cache@v3
+        with:
+          path: ~/.ccache
+          key: ${{ runner.os }}-ccache-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-
+
+      - name: Sync OrangeFox Workspace (Shallow Clone)
+        run: |
+          # Added --depth=1 to heavily reduce git clone download times
+          git clone --depth=1 https://gitlab.com/OrangeFox/sync.git
+          cd sync
+          yes | ./orangefox_sync.sh --branch 12.1 --path ${{ github.workspace }}/workspace
+
+      - name: Checkout Device Tree
+        uses: actions/checkout@v4
+        with:
+          path: workspace/device/infinix/X682C
+          fetch-depth: 1 # Ensuring shallow checkout here as well
+
+      - name: Build Recovery
+        run: |
+          cd workspace
+          set +e
+          source build/envsetup.sh
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export FOX_BUILD_DEVICE=X682C
+          export LC_ALL="C"
+          export USE_CCACHE=1
+          export CCACHE_EXEC=/usr/bin/ccache
+          ccache -M 10G
+          # Increased throttle to -j4 to speed up compilation
+          export SOONG_GEN_NINJA_ARGS="-j4"
+          export NINJA_ARGS="-j4"
+          export _JAVA_OPTIONS="-Xmx4g"
+          lunch twrp_X682C-eng
+          set -e
+          make -j4 recoveryimage
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OrangeFox-X682C-Recovery
+          path: workspace/out/target/product/X682C/recovery.img
