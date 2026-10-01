@@ -10,26 +10,14 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Maximize Build Space & Disable OOM Killer
+      - name: Maximize Build Space
         run: |
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
           sudo rm -rf /opt/hostedtoolcache/CodeQL
           sudo apt-get clean
-          sudo systemctl disable --now systemd-oomd || true
           df -h
-
-      - name: Allocate Swap Space
-        run: |
-          sudo swapoff -a
-          sudo rm -f /swapfile
-          # 12GB Swap - With systemd-oomd dead, the kernel will use this safely
-          sudo dd if=/dev/zero of=/swapfile bs=1M count=12288 status=progress
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
 
       - name: Set up build environment
         run: |
@@ -41,9 +29,8 @@ jobs:
           git config --global user.email "sysmar3x-glitch@users.noreply.github.com"
 
       - name: Setup ccache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
-          # Point the GitHub cache to the Android-allowed 'out' directory
           path: workspace/out/ccache
           key: ${{ runner.os }}-ccache-${{ github.sha }}
           restore-keys: |
@@ -51,7 +38,6 @@ jobs:
 
       - name: Sync OrangeFox Workspace
         run: |
-          # Shallow clone to speed up download
           git clone --depth=1 https://gitlab.com/OrangeFox/sync.git
           cd sync
           yes | ./orangefox_sync.sh --branch 12.1 --path ${{ github.workspace }}/workspace
@@ -65,9 +51,8 @@ jobs:
       - name: Build Recovery
         run: |
           cd workspace
-          set +e
           
-          # Force ccache to use the 'out' directory to bypass Android's read-only sandbox
+          # Route ccache directly to the out/ folder to bypass the Android sandbox read-only limits
           export CCACHE_DIR=$(pwd)/out/ccache
           export CCACHE_EXEC=/usr/bin/ccache
           export USE_CCACHE=1
@@ -79,13 +64,10 @@ jobs:
           export ALLOW_MISSING_DEPENDENCIES=true
           export FOX_BUILD_DEVICE=X682C
           export LC_ALL="C"
-          export SOONG_GEN_NINJA_ARGS="-j4"
-          export NINJA_ARGS="-j4"
           export _JAVA_OPTIONS="-Xmx4g"
           
           lunch twrp_X682C-eng
-          set -e
-          make -j4 recoveryimage
+          mka recoveryimage
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
